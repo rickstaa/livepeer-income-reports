@@ -294,6 +294,7 @@ query Round($id: ID!) {
 }
 """
 
+
 def get_csv_column_order(currency: str) -> list:
     """Generate the CSV column order with dynamic currency names.
 
@@ -1614,7 +1615,7 @@ def calculate_actual_release_values(
                 if not rebonds_during_unbonding.empty
                 else 0
             )
-        
+
         remaining_amount = max(0, unbond_amount - total_rebonded)
         final_release_value = remaining_amount * release_price
         unbond_data.at[idx, f"release value ({currency})"] = final_release_value
@@ -2629,10 +2630,7 @@ if __name__ == "__main__":
         withdraw_fees_data,
         rebond_data,
     ]
-    if all(
-        df.empty
-        for df in all_data
-    ):
+    if all(df.empty for df in all_data):
         print("\033[93mNo income data found, exiting.\033[0m")  # Yellow text
         sys.exit(0)
 

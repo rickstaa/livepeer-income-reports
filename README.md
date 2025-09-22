@@ -14,6 +14,7 @@ This repository provides Python scripts to retrieve and generate detailed report
 - `get_delegator_balance.py`: Retrieves the ETH and LPT balances (both bonded and unbonded) of one or more delegator wallets on Arbitrum at a specific timestamp, with support for aggregated multi-wallet reporting.
 - `get_delegator_income.py`: Tracks delegator rewards (LPT) and fees (ETH) over time, factoring in wallet activity and historical pricing for accurate income and tax reporting.
 - `get_orchestrator_info.py`: Retrieves information about your orchestrator's income into a CSV file.
+- `get_token_price.py`: Fetches historical price data for specified tokens (e.g., LPT, ETH) at given timestamp.
 
 ## Usage
 

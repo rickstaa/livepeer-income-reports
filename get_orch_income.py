@@ -34,7 +34,7 @@ tqdm.pandas()
 GRAPH_AUTH_TOKEN = os.getenv("GRAPH_AUTH_TOKEN")
 ARBISCAN_API_KEY_TOKEN = os.getenv("ARBISCAN_API_KEY_TOKEN")
 PRICE_API_PROVIDER = os.getenv("PRICE_API_PROVIDER", "cryptocompare").lower()
-PRICE_API_TOKEN = os.getenv("PRICE_API_TOKEN", "")
+CRYPTO_COMPARE_API_KEY = os.getenv("CRYPTO_COMPARE_API_KEY", "")
 GRAPH_ID = os.getenv("GRAPH_ID", "FE63YgkzcpVocxdCEyEYbvjYqEf2kb1A6daMYRxmejYC")
 ARB_RPC_URL = os.getenv("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc")
 
@@ -46,19 +46,19 @@ if not ARBISCAN_API_KEY_TOKEN:
     raise EnvironmentError(
         "ARBISCAN_API_KEY_TOKEN environment variable is required but not set."
     )
-if not PRICE_API_TOKEN:
+if not CRYPTO_COMPARE_API_KEY:
     raise EnvironmentError(
-        "PRICE_API_TOKEN environment variable is required but not set."
+        "CRYPTO_COMPARE_API_KEY environment variable is required but not set."
     )
 
 CRYPTOCOMPARE_API_TOKENS: list = []
 if PRICE_API_PROVIDER == "cryptocompare":
     CRYPTOCOMPARE_API_TOKENS = [
-        t.strip() for t in PRICE_API_TOKEN.split(",") if t.strip()
+        t.strip() for t in CRYPTO_COMPARE_API_KEY.split(",") if t.strip()
     ]
     if not CRYPTOCOMPARE_API_TOKENS:
         raise EnvironmentError(
-            "At least one CryptoCompare API token is required in PRICE_API_TOKEN when using cryptocompare provider."
+            "At least one CryptoCompare API token is required in CRYPTO_COMPARE_API_KEY."
         )
 
 GRAPHQL_ENDPOINT = (
@@ -797,7 +797,7 @@ def fetch_crypto_price_cryptocompare(
         "toTs": unix_timestamp,
     }
     if not CRYPTOCOMPARE_API_TOKENS:
-        CRYPTOCOMPARE_API_TOKENS.append(PRICE_API_TOKEN)
+        CRYPTOCOMPARE_API_TOKENS.append(CRYPTO_COMPARE_API_KEY)
 
     # Keep trying tokens until one succeeds or the user provides a new token.
     while True:

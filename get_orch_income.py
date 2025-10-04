@@ -30,13 +30,15 @@ import json
 
 tqdm.pandas()
 
-GRAPH_TOKEN = os.getenv("GRAPH_AUTH_TOKEN")
+
+GRAPH_AUTH_TOKEN = os.getenv("GRAPH_AUTH_TOKEN")
 ARBISCAN_API_KEY_TOKEN = os.getenv("ARBISCAN_API_KEY_TOKEN")
-CRYPTO_COMPARE_API_KEY = os.getenv("CRYPTO_COMPARE_API_KEY", "")
+PRICE_API_PROVIDER = os.getenv("PRICE_API_PROVIDER", "cryptocompare").lower()
+PRICE_API_TOKEN = os.getenv("PRICE_API_TOKEN", "")
 GRAPH_ID = os.getenv("GRAPH_ID", "FE63YgkzcpVocxdCEyEYbvjYqEf2kb1A6daMYRxmejYC")
 ARB_RPC_URL = os.getenv("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc")
 
-if not GRAPH_TOKEN:
+if not GRAPH_AUTH_TOKEN:
     raise EnvironmentError(
         "GRAPH_AUTH_TOKEN environment variable is required but not set."
     )
@@ -44,14 +46,18 @@ if not ARBISCAN_API_KEY_TOKEN:
     raise EnvironmentError(
         "ARBISCAN_API_KEY_TOKEN environment variable is required but not set."
     )
+if not PRICE_API_TOKEN:
+    raise EnvironmentError(
+        "PRICE_API_TOKEN environment variable is required but not set."
+    )
 
 GRAPHQL_ENDPOINT = (
-    f"https://gateway.thegraph.com/api/{GRAPH_TOKEN}/subgraphs/id/{GRAPH_ID}"
+    f"https://gateway.thegraph.com/api/{GRAPH_AUTH_TOKEN}/subgraphs/id/{GRAPH_ID}"
 )
 ARBISCAN_ENDPOINT = "https://api.etherscan.io/v2/api"
 
 TRANSPORT = RequestsHTTPTransport(url=GRAPHQL_ENDPOINT, verify=True, retries=3)
-GRAPHQL_CLIENT = Client(transport=TRANSPORT, fetch_schema_from_transport=True)
+GRAPHQL_CLIENT = Client(transport=TRANSPORT, fetch_schema_from_transport=False)
 
 ARB_CLIENT = Web3(Web3.HTTPProvider(ARB_RPC_URL, request_kwargs={"timeout": 60}))
 
@@ -669,6 +675,7 @@ def fetch_pending_stake(address: str, block_hash: str) -> int:
     Returns:
         The pending stake for the delegator at the specified block hash.
     """
+    global RPC_HISTORY_ERROR_DISPLAYED
     try:
         checksum_address = Web3.to_checksum_address(address)
         pending_stake = BONDING_MANAGER_CONTRACT.functions.pendingStake(
@@ -757,6 +764,80 @@ def fetch_graphql_events(query: str, variables: dict, event_key: str) -> list:
     return all_events
 
 
+def fetch_crypto_price_cryptocompare(
+    crypto_symbol: str, target_currency: str, unix_timestamp: int
+) -> float:
+    """Fetch the historical price of a cryptocurrency using the CryptoCompare API in a
+    specific currency at a specific timestamp.
+
+    Args:
+        crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
+        target_currency: The target currency symbol (e.g., "EUR", "USD").
+        unix_timestamp: The Unix timestamp for the desired historical price.
+
+    Returns:
+        The price of the cryptocurrency in the target currency.
+    """
+    url = "https://min-api.cryptocompare.com/data/v2/histoday"
+    params = {
+        "fsym": crypto_symbol,
+        "tsym": target_currency,
+        "limit": 1,
+        "toTs": unix_timestamp,
+        "api_key": PRICE_API_TOKEN,
+    }
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        raise ValueError(f"Error fetching crypto price from CryptoCompare: {e}")
+    if data.get("Response") == "Error":
+        raise ValueError(f"CryptoCompare API Error: {data.get('Message')}")
+    if not data.get("Data") or not data["Data"].get("Data"):
+        raise ValueError("CryptoCompare API returned empty or invalid data.")
+    return data["Data"]["Data"][-1]["close"]
+
+
+def fetch_crypto_price_coinmarketcap(
+    crypto_symbol: str, target_currency: str, unix_timestamp: int
+) -> float:
+    """Fetch the historical price of a cryptocurrency using the CoinMarketCap API in a specific currency at a specific timestamp.
+
+    Args:
+        crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
+        target_currency: The target currency symbol (e.g., "EUR", "USD").
+        unix_timestamp: The Unix timestamp for the desired historical price.
+
+    Returns:
+        The price of the cryptocurrency in the target currency.
+    """
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/historical"
+    target_currency = target_currency.upper()
+    time_iso = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S"
+    )
+    params = {
+        "symbol": crypto_symbol.upper(),
+        "convert": target_currency,
+        "time_end": time_iso,
+        "count": 1,
+        "interval": "daily",
+    }
+    headers = {"X-CMC_PRO_API_KEY": PRICE_API_TOKEN}
+    try:
+        response = requests.get(url, params=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        quotes = data.get("data", {}).get("quotes", [])
+        if not quotes:
+            raise ValueError("No price data returned from CoinMarketCap.")
+        price = quotes[-1]["quote"][target_currency]["price"]
+        return float(price)
+    except Exception as e:
+        raise ValueError(f"Error fetching crypto price from CoinMarketCap: {e}")
+
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=1, max=60),
@@ -766,7 +847,7 @@ def fetch_crypto_price(
     crypto_symbol: str, target_currency: str, unix_timestamp: int
 ) -> float:
     """Fetch the historical price of a cryptocurrency in a specific currency at a
-    specific timestamp using the CryptoCompare API.
+    specific timestamp using the selected price provider (CryptoCompare or CoinGecko).
 
     Args:
         crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
@@ -779,27 +860,13 @@ def fetch_crypto_price(
     Raises:
         ValueError: If the API response indicates an error or rate limit exceeded.
     """
-    url = "https://min-api.cryptocompare.com/data/v2/histoday"
-    params = {
-        "fsym": crypto_symbol,
-        "tsym": target_currency,
-        "limit": 1,
-        "toTs": unix_timestamp,
-        "api_key": CRYPTO_COMPARE_API_KEY,
-    }
-
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        raise ValueError(f"Error fetching crypto price: {e}")
-
-    if data.get("Response") == "Error":
-        raise ValueError(f"CryptoCompare API Error: {data.get('Message')}")
-    if not data.get("Data") or not data["Data"].get("Data"):
-        raise ValueError("CryptoCompare API returned empty or invalid data.")
-    return data["Data"]["Data"][-1]["close"]
+    if PRICE_API_PROVIDER == "coinmarketcap":
+        return fetch_crypto_price_coinmarketcap(
+            crypto_symbol, target_currency, unix_timestamp
+        )
+    return fetch_crypto_price_cryptocompare(
+        crypto_symbol, target_currency, unix_timestamp
+    )
 
 
 @retry(

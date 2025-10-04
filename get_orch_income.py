@@ -51,6 +51,16 @@ if not PRICE_API_TOKEN:
         "PRICE_API_TOKEN environment variable is required but not set."
     )
 
+CRYPTOCOMPARE_API_TOKENS: list = []
+if PRICE_API_PROVIDER == "cryptocompare":
+    CRYPTOCOMPARE_API_TOKENS = [
+        t.strip() for t in PRICE_API_TOKEN.split(",") if t.strip()
+    ]
+    if not CRYPTOCOMPARE_API_TOKENS:
+        raise EnvironmentError(
+            "At least one CryptoCompare API token is required in PRICE_API_TOKEN when using cryptocompare provider."
+        )
+
 GRAPHQL_ENDPOINT = (
     f"https://gateway.thegraph.com/api/{GRAPH_AUTH_TOKEN}/subgraphs/id/{GRAPH_ID}"
 )
@@ -768,7 +778,8 @@ def fetch_crypto_price_cryptocompare(
     crypto_symbol: str, target_currency: str, unix_timestamp: int
 ) -> float:
     """Fetch the historical price of a cryptocurrency using the CryptoCompare API in a
-    specific currency at a specific timestamp.
+    specific currency at a specific timestamp. Handles multiple API tokens and
+    requests new tokens if all are rate-limited.
 
     Args:
         crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
@@ -779,59 +790,67 @@ def fetch_crypto_price_cryptocompare(
         The price of the cryptocurrency in the target currency.
     """
     url = "https://min-api.cryptocompare.com/data/v2/histoday"
-    params = {
+    base_params = {
         "fsym": crypto_symbol,
         "tsym": target_currency,
         "limit": 1,
         "toTs": unix_timestamp,
-        "api_key": PRICE_API_TOKEN,
     }
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        raise ValueError(f"Error fetching crypto price from CryptoCompare: {e}")
-    if data.get("Response") == "Error":
-        raise ValueError(f"CryptoCompare API Error: {data.get('Message')}")
-    if not data.get("Data") or not data["Data"].get("Data"):
-        raise ValueError("CryptoCompare API returned empty or invalid data.")
-    return data["Data"]["Data"][-1]["close"]
+    if not CRYPTOCOMPARE_API_TOKENS:
+        CRYPTOCOMPARE_API_TOKENS.append(PRICE_API_TOKEN)
 
+    # Keep trying tokens until one succeeds or the user provides a new token.
+    while True:
+        local_tokens = CRYPTOCOMPARE_API_TOKENS.copy()
+        for token in local_tokens:
+            params = {**base_params, "api_key": token}
+            try:
+                response = requests.get(url, params=params, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+            except Exception as e:
+                raise ValueError(f"Error fetching crypto price from CryptoCompare: {e}")
 
-def fetch_crypto_price_coingecko(
-    crypto_symbol: str, target_currency: str, unix_timestamp: int
-) -> float:
-    """Fetch the historical price of a cryptocurrency using the CoinGecko API (paid plan) in a specific currency at a specific timestamp.
+            # If API returns an error, check for rate-limit and otherwise fail.
+            if data.get("Response") == "Error":
+                msg = (data.get("Message") or "").lower()
+                if "rate limit" in msg or "you are over your rate limit" in msg:
+                    print(
+                        f"CryptoCompare API token '{token[-6:]}' rate-limited or "
+                        "exhausted. Trying next token..."
+                    )
+                    # Remove token from global list and continue.
+                    CRYPTOCOMPARE_API_TOKENS.remove(token)
+                    continue
 
-    Args:
-        crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
-        target_currency: The target currency symbol (e.g., "EUR", "USD").
-        unix_timestamp: The Unix timestamp for the desired historical price.
+                # Non-rate-limit API error: fail fast.
+                raise ValueError(f"CryptoCompare API Error: {data.get('Message')}")
 
-    Returns:
-        The price of the cryptocurrency in the target currency.
-    """
-    url = f"https://pro-api.coingecko.com/api/v3/coins/{crypto_symbol.lower()}/history"
-    date_str = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M"
-    )
-    params = {
-        "date": date_str,
-        "localization": "false",
-    }
-    headers = {"x-cg-pro-api-key": PRICE_API_TOKEN}
-    try:
-        response = requests.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        market_data = data.get("market_data", {})
-        if not market_data:
-            raise ValueError("No market data returned from CoinGecko.")
-        price = market_data["current_price"][target_currency.lower()]
-        return float(price)
-    except Exception as e:
-        raise ValueError(f"Error fetching crypto price from CoinGecko: {e}")
+            if not data.get("Data") or not data["Data"].get("Data"):
+                raise ValueError("CryptoCompare API returned empty or invalid data.")
+
+            return data["Data"]["Data"][-1]["close"]
+
+        # Ask for new token if exhausted all tokens.
+        print(
+            "All provided CryptoCompare tokens appear to be rate-limited or exhausted."
+        )
+        try:
+            new_token = input(
+                "Enter a new CryptoCompare API token to add (or press Enter to abort): "
+            ).strip()
+        except Exception:
+            raise ValueError(
+                "All CryptoCompare tokens exhausted and interactive input is not available."
+            )
+        if not new_token:
+            raise ValueError(
+                "No available CryptoCompare API tokens left; aborting price fetch."
+            )
+        CRYPTOCOMPARE_API_TOKENS.insert(0, new_token)
+        print(
+            "Added new CryptoCompare token; retrying price fetch with the new token first..."
+        )
 
 
 @retry(
@@ -843,7 +862,7 @@ def fetch_crypto_price(
     crypto_symbol: str, target_currency: str, unix_timestamp: int
 ) -> float:
     """Fetch the historical price of a cryptocurrency in a specific currency at a
-    specific timestamp using the selected price provider (CryptoCompare or CoinGecko).
+    specific timestamp using the cryptocompare API.
 
     Args:
         crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
@@ -856,11 +875,6 @@ def fetch_crypto_price(
     Raises:
         ValueError: If the API response indicates an error or rate limit exceeded.
     """
-    provider = PRICE_API_PROVIDER
-    if provider == "coingecko":
-        return fetch_crypto_price_coingecko(
-            crypto_symbol, target_currency, unix_timestamp
-        )
     return fetch_crypto_price_cryptocompare(
         crypto_symbol, target_currency, unix_timestamp
     )

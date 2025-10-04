@@ -26,8 +26,8 @@ This repository provides Python scripts to retrieve and generate detailed report
    ```bash
    export GRAPH_AUTH_TOKEN=your_token_here
    export ARBISCAN_API_KEY_TOKEN=your_token_here
-   export PRICE_API_PROVIDER=cryptocompare  # or coinmarketcap
-   export PRICE_API_TOKEN=your_token_here
+   export PRICE_API_PROVIDER=cryptocompare  # or coingecko
+   export PRICE_API_TOKEN=your_token_here   # CryptoCompare or CoinGecko API key
    export ARB_RPC_URL=https://arb1.arbitrum.io/rpc
    ```
 
@@ -35,8 +35,8 @@ This repository provides Python scripts to retrieve and generate detailed report
 
    - GRAPH_AUTH_TOKEN (The Graph gateway API key): [The Graph Studio – API Keys](https://thegraph.com/studio).
    - ARBISCAN_API_KEY_TOKEN (Etherscan developer API key): [Etherscan API Keys](https://etherscan.io/myapikey).
-   - PRICE_API_PROVIDER: Set to `cryptocompare` (default) or `coinmarketcap` to select the price provider.
-   - PRICE_API_TOKEN: [CryptoCompare API Keys](https://www.cryptocompare.com/cryptopian/api-keys) (for CryptoCompare) or [CoinMarketCap API Keys](https://pro.coinmarketcap.com/signup/) (for CoinMarketCap).
+   - PRICE_API_PROVIDER: Set to `cryptocompare` (default — free, second precision) or `coingecko` (paid, minute precision) to select the price provider.
+   - PRICE_API_TOKEN: [CryptoCompare](https://www.cryptocompare.com/cryptopian/api-keys) or [CoinGecko Pro](https://www.coingecko.com/en/api/pricing) API key.
    - ARB_RPC_URL (Arbitrum One RPC endpoint): use a provider like [Alchemy](https://www.alchemy.com/), [Infura](https://www.infura.io/), [QuickNode](https://www.quicknode.com/), or [Ankr](https://www.ankr.com/); use an archive-capable RPC.
 
 3. Create a python virtual environment and install the required packages:

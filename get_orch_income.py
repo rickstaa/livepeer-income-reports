@@ -799,10 +799,10 @@ def fetch_crypto_price_cryptocompare(
     return data["Data"]["Data"][-1]["close"]
 
 
-def fetch_crypto_price_coinmarketcap(
+def fetch_crypto_price_coingecko(
     crypto_symbol: str, target_currency: str, unix_timestamp: int
 ) -> float:
-    """Fetch the historical price of a cryptocurrency using the CoinMarketCap API in a specific currency at a specific timestamp.
+    """Fetch the historical price of a cryptocurrency using the CoinGecko API (paid plan) in a specific currency at a specific timestamp.
 
     Args:
         crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
@@ -812,30 +812,26 @@ def fetch_crypto_price_coinmarketcap(
     Returns:
         The price of the cryptocurrency in the target currency.
     """
-    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/historical"
-    target_currency = target_currency.upper()
-    time_iso = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%S"
+    url = f"https://pro-api.coingecko.com/api/v3/coins/{crypto_symbol.lower()}/history"
+    date_str = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M"
     )
     params = {
-        "symbol": crypto_symbol.upper(),
-        "convert": target_currency,
-        "time_end": time_iso,
-        "count": 1,
-        "interval": "daily",
+        "date": date_str,
+        "localization": "false",
     }
-    headers = {"X-CMC_PRO_API_KEY": PRICE_API_TOKEN}
+    headers = {"x-cg-pro-api-key": PRICE_API_TOKEN}
     try:
         response = requests.get(url, params=params, headers=headers)
         response.raise_for_status()
         data = response.json()
-        quotes = data.get("data", {}).get("quotes", [])
-        if not quotes:
-            raise ValueError("No price data returned from CoinMarketCap.")
-        price = quotes[-1]["quote"][target_currency]["price"]
+        market_data = data.get("market_data", {})
+        if not market_data:
+            raise ValueError("No market data returned from CoinGecko.")
+        price = market_data["current_price"][target_currency.lower()]
         return float(price)
     except Exception as e:
-        raise ValueError(f"Error fetching crypto price from CoinMarketCap: {e}")
+        raise ValueError(f"Error fetching crypto price from CoinGecko: {e}")
 
 
 @retry(
@@ -860,8 +856,9 @@ def fetch_crypto_price(
     Raises:
         ValueError: If the API response indicates an error or rate limit exceeded.
     """
-    if PRICE_API_PROVIDER == "coinmarketcap":
-        return fetch_crypto_price_coinmarketcap(
+    provider = PRICE_API_PROVIDER
+    if provider == "coingecko":
+        return fetch_crypto_price_coingecko(
             crypto_symbol, target_currency, unix_timestamp
         )
     return fetch_crypto_price_cryptocompare(

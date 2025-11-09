@@ -5,6 +5,12 @@ import sys
 from datetime import datetime
 from pandas import ExcelWriter
 from get_orch_income import fetch_crypto_price, human_to_unix_time
+from price_cache import PriceCache
+from cache_manager import DataCache
+
+# Initialize caches
+PRICE_CACHE = PriceCache()
+DATA_CACHE = DataCache()
 
 
 def normalize_asset_symbol(asset: str) -> str:
@@ -101,8 +107,9 @@ def add_crypto_prices(
         df[f"Price ({currency})"] = prices
         df[f"Value ({currency})"] = values
         if output_file is None:
+            current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
             base_name = input_file.rsplit(".", 1)[0]
-            output_file = f"{base_name}_with_prices_{currency.lower()}.xlsx"
+            output_file = f"{base_name}_with_prices_{currency.lower()}_{current_time}.xlsx"
         with ExcelWriter(output_file) as writer:
             df.to_excel(writer, sheet_name="crypto", index=False)
 

@@ -26,14 +26,36 @@ from tabulate import tabulate
 from tqdm import tqdm
 from typing import Callable
 import json
-
+from price_cache import PriceCache
+from cache_manager import DataCache
 
 tqdm.pandas()
 
+# Add this line to initialize the price cache
+PRICE_CACHE = PriceCache()
+DATA_CACHE = DataCache()
 
 GRAPH_AUTH_TOKEN = os.getenv("GRAPH_AUTH_TOKEN")
 ARBISCAN_API_KEY_TOKEN = os.getenv("ARBISCAN_API_KEY_TOKEN")
-CRYPTO_COMPARE_API_KEY = os.getenv("CRYPTO_COMPARE_API_KEY", "")
+PRICE_API_PROVIDER = os.getenv("PRICE_API_PROVIDER", "cryptocompare").lower()
+CRYPTO_COMPARE_API_KEYS = os.getenv("CRYPTO_COMPARE_API_KEY", "")
+CRYPTOCOMPARE_API_TOKENS = []
+if PRICE_API_PROVIDER == "cryptocompare":
+    # Handle multiple API keys separated by commas
+    if "," in CRYPTO_COMPARE_API_KEYS:
+        CRYPTOCOMPARE_API_TOKENS = [
+            key.strip() for key in CRYPTO_COMPARE_API_KEYS.split(",") if key.strip()
+        ]
+    # Handle single API key
+    elif CRYPTO_COMPARE_API_KEYS.strip():
+        CRYPTOCOMPARE_API_TOKENS = [CRYPTO_COMPARE_API_KEYS.strip()]
+        
+    if not CRYPTOCOMPARE_API_TOKENS:
+        raise EnvironmentError(
+            "At least one CryptoCompare API token is required in CRYPTO_COMPARE_API_KEY."
+        )
+    print(f"Loaded {len(CRYPTOCOMPARE_API_TOKENS)} CryptoCompare API tokens")
+
 GRAPH_ID = os.getenv("GRAPH_ID", "FE63YgkzcpVocxdCEyEYbvjYqEf2kb1A6daMYRxmejYC")
 ARB_RPC_URL = os.getenv("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc")
 
@@ -45,18 +67,9 @@ if not ARBISCAN_API_KEY_TOKEN:
     raise EnvironmentError(
         "ARBISCAN_API_KEY_TOKEN environment variable is required but not set."
     )
-if not CRYPTO_COMPARE_API_KEY:
+if not CRYPTO_COMPARE_API_KEYS:
     raise EnvironmentError(
         "CRYPTO_COMPARE_API_KEY environment variable is required but not set."
-    )
-
-CRYPTOCOMPARE_API_TOKENS: list = []
-CRYPTOCOMPARE_API_TOKENS = [
-    t.strip() for t in CRYPTO_COMPARE_API_KEY.split(",") if t.strip()
-]
-if not CRYPTOCOMPARE_API_TOKENS:
-    raise EnvironmentError(
-        "At least one CryptoCompare API token is required in CRYPTO_COMPARE_API_KEY."
     )
 
 GRAPHQL_ENDPOINT = (
@@ -468,14 +481,12 @@ def create_arbiscan_url(transaction_id: str) -> str:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_activation_timestamp(orchestrator: str) -> int:
-    """Fetch the activation timestamp for a given orchestrator.
+    """Fetch the activation timestamp for a given orchestrator with caching."""
+    cache_key = "activation_timestamp"
+    cached_data = DATA_CACHE.get_data(orchestrator, "activation", cache_key)
+    if cached_data is not None:
+        return cached_data
 
-    Args:
-        orchestrator: The address of the orchestrator.
-
-    Returns:
-        The activation timestamp for the orchestrator, or None if not found.
-    """
     try:
         query = gql(TRANSCODER_QUERY)
         variables = {"id": orchestrator.lower()}
@@ -483,7 +494,9 @@ def fetch_activation_timestamp(orchestrator: str) -> int:
 
         transcoder = response.get("transcoder")
         if transcoder and transcoder.get("activationTimestamp"):
-            return int(transcoder["activationTimestamp"])
+            timestamp = int(transcoder["activationTimestamp"])
+            DATA_CACHE.save_data(orchestrator, "activation", cache_key, timestamp)
+            return timestamp
         return None
     except Exception as e:
         print(f"Error fetching activation timestamp for {orchestrator}: {e}")
@@ -625,19 +638,19 @@ def fetch_block_number_by_timestamp(timestamp: int, closest: str = "before") -> 
     retry=retry_if_exception_type(Exception),
 )
 def fetch_block_hash_for_round(round_number: str | int) -> str:
-    """Fetch the block hash for a specific round using the RoundsManager contract.
+    """Fetch the block hash for a specific round using cache."""
+    cache_key = f"block_hash_{round_number}"
+    cached_data = DATA_CACHE.get_data("global", "round_block_hashes", cache_key)
+    if cached_data is not None:
+        return cached_data
 
-    Args:
-        round_number: The round number.
-
-    Returns:
-        The block hash as a hexadecimal string.
-    """
     try:
         block_hash = ROUNDS_MANAGER_CONTRACT.functions.blockHashForRound(
             int(round_number)
         ).call()
-        return Web3.to_hex(block_hash)
+        hex_hash = Web3.to_hex(block_hash)
+        DATA_CACHE.save_data("global", "round_block_hashes", cache_key, hex_hash)
+        return hex_hash
     except Exception as e:
         print(f"Error fetching block hash for round {round_number}: {e}")
         return None
@@ -648,49 +661,23 @@ def fetch_block_hash_for_round(round_number: str | int) -> str:
     wait=wait_exponential(multiplier=1, min=1, max=60),
     retry=retry_if_exception_type(Exception),
 )
-def fetch_round_timestamp(round_number: int) -> int:
-    """Fetch the timestamp for a specific round.
-
-    Args:
-        round_number: The round number to get the timestamp for.
-
-    Returns:
-        The timestamp when the round started, or None if error.
-    """
-    try:
-        block_hash = fetch_block_hash_for_round(round_number)
-        if not block_hash:
-            return None
-        block = ARB_CLIENT.eth.get_block(block_hash)
-        return int(block["timestamp"])
-    except Exception as e:
-        print(f"Error fetching timestamp for round {round_number}: {e}")
-        return None
-
-
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1, min=1, max=60),
-    retry=retry_if_exception_type(Exception),
-)
 def fetch_pending_stake(address: str, block_hash: str) -> int:
-    """Fetch the pending stake for a given delegator at a specific block hash.
+    """Fetch the pending stake with caching."""
+    cache_key = f"stake_{block_hash}"
+    cached_data = DATA_CACHE.get_data(address, "pending_stake", cache_key)
+    if cached_data is not None:
+        return cached_data
 
-    Args:
-        address: The address of the delegator.
-        block_hash: The block hash to fetch the pending stake at.
-
-    Returns:
-        The pending stake for the delegator at the specified block hash.
-    """
-    global RPC_HISTORY_ERROR_DISPLAYED
     try:
         checksum_address = Web3.to_checksum_address(address)
         pending_stake = BONDING_MANAGER_CONTRACT.functions.pendingStake(
             checksum_address, 0
         ).call(block_identifier=block_hash)
-        return pending_stake / 10**18
+        stake_value = pending_stake / 10**18
+        DATA_CACHE.save_data(address, "pending_stake", cache_key, stake_value)
+        return stake_value
     except Exception as e:
+        global RPC_HISTORY_ERROR_DISPLAYED
         if "missing trie node" in str(e) and not RPC_HISTORY_ERROR_DISPLAYED:
             print(
                 "\033[93mWarning: RPC node lacks historical data for pendingStake. "
@@ -708,22 +695,28 @@ def fetch_pending_stake(address: str, block_hash: str) -> int:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_pending_fees(address: str, block_hash: str) -> float:
-    """Fetch the pending fees for a given delegator at a specific block hash.
-
+    """Fetch the pending fees with caching.
+    
     Args:
-        address: The address of the delegator.
-        block_hash: The block hash to fetch the pending fees at.
-
+        address: The address to fetch pending fees for.
+        block_hash: The block hash to fetch fees at.
+        
     Returns:
-        The pending fees for the delegator at the specified block hash.
-        Returns None if an error occurs.
+        The pending fees in ETH units, or None if error occurs.
     """
+    cache_key = f"fees_{block_hash}"
+    cached_data = DATA_CACHE.get_data(address, "pending_fees", cache_key)
+    if cached_data is not None:
+        return cached_data
+
     try:
         checksum_address = Web3.to_checksum_address(address)
         pending_fees = BONDING_MANAGER_CONTRACT.functions.pendingFees(
             checksum_address, 0
         ).call(block_identifier=block_hash)
-        return pending_fees / 10**18
+        fees_value = pending_fees / 10**18
+        DATA_CACHE.save_data(address, "pending_fees", cache_key, fees_value)
+        return fees_value
     except Exception as e:
         global RPC_HISTORY_ERROR_DISPLAYED
         if "missing trie node" in str(e) and not RPC_HISTORY_ERROR_DISPLAYED:
@@ -742,16 +735,14 @@ def fetch_pending_fees(address: str, block_hash: str) -> float:
     wait=wait_exponential(multiplier=1, min=1, max=60),
     retry=retry_if_exception_type(Exception),
 )
-def fetch_graphql_events(query: str, variables: dict, event_key: str) -> list:
-    """Fetch events from the GraphQL API based on the provided query and event key.
+def fetch_graphql_events(query: str, variables: dict, event_key: str, cache_params: dict = None) -> list:
+    """Fetch events from GraphQL API with caching support."""
+    if cache_params:
+        cache_key = f"{cache_params['type']}_{variables.get('skip', 0)}_{variables.get('first', 100)}"
+        cached_data = DATA_CACHE.get_data(cache_params['address'], cache_params['type'], cache_key)
+        if cached_data is not None:
+            return cached_data
 
-    Args:
-        query: The GraphQL query string.
-        variables: A dictionary of variables to be used in the query.
-        event_key: The key in the response that contains the list of events.
-    Returns:
-        A list of events fetched from the GraphQL API.
-    """
     all_events = []
     page_size = variables.get("first", 100)
     skip = variables.get("skip", 0)
@@ -769,15 +760,17 @@ def fetch_graphql_events(query: str, variables: dict, event_key: str) -> list:
         except Exception as e:
             print(f"Error while fetching {event_key}: {e}")
             break
+
+    if cache_params:
+        DATA_CACHE.save_data(cache_params['address'], cache_params['type'], cache_key, all_events)
+    
     return all_events
 
 
 def fetch_crypto_price_cryptocompare(
     crypto_symbol: str, target_currency: str, unix_timestamp: int
 ) -> float:
-    """Fetch the historical price of a cryptocurrency using the CryptoCompare API in a
-    specific currency at a specific timestamp. Handles multiple API tokens and
-    requests new tokens if all are rate-limited.
+    """Fetch the historical price of a cryptocurrency using the CryptoCompare API with caching.
 
     Args:
         crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
@@ -787,6 +780,11 @@ def fetch_crypto_price_cryptocompare(
     Returns:
         The price of the cryptocurrency in the target currency.
     """
+    # Check cache first
+    cached_price = PRICE_CACHE.get_cached_price(crypto_symbol, target_currency, unix_timestamp)
+    if cached_price is not None:
+        return cached_price
+
     url = "https://min-api.cryptocompare.com/data/v2/histoday"
     base_params = {
         "fsym": crypto_symbol,
@@ -794,8 +792,10 @@ def fetch_crypto_price_cryptocompare(
         "limit": 1,
         "toTs": unix_timestamp,
     }
+    
+    if not CRYPTOCOMPARE_API_TOKENS:
+        CRYPTOCOMPARE_API_TOKENS.append(CRYPTO_COMPARE_API_KEY)
 
-    # Keep trying tokens until one succeeds or the user provides a new token.
     while True:
         local_tokens = CRYPTOCOMPARE_API_TOKENS.copy()
         for token in local_tokens:
@@ -804,49 +804,39 @@ def fetch_crypto_price_cryptocompare(
                 response = requests.get(url, params=params, timeout=15)
                 response.raise_for_status()
                 data = response.json()
+
+                if data.get("Response") == "Error":
+                    msg = (data.get("Message") or "").lower()
+                    if "rate limit" in msg or "you are over your rate limit" in msg:
+                        continue
+                    raise ValueError(f"CryptoCompare API error: {data.get('Message')}")
+
+                if not data.get("Data") or not data["Data"].get("Data"):
+                    raise ValueError("No price data returned from CryptoCompare")
+
+                price = data["Data"]["Data"][-1]["close"]
+                
+                # Cache the fetched price
+                PRICE_CACHE.save_price(crypto_symbol, target_currency, unix_timestamp, price)
+                
+                return price
+
             except Exception as e:
-                raise ValueError(f"Error fetching crypto price from CryptoCompare: {e}")
+                print(f"Error with token {token}: {e}")
+                continue
 
-            # If API returns an error, check for rate-limit and otherwise fail.
-            if data.get("Response") == "Error":
-                msg = (data.get("Message") or "").lower()
-                if "rate limit" in msg or "you are over your rate limit" in msg:
-                    print(
-                        f"CryptoCompare API token '{token[-6:]}' rate-limited or "
-                        "exhausted. Trying next token..."
-                    )
-                    # Remove token from global list and continue.
-                    CRYPTOCOMPARE_API_TOKENS.remove(token)
-                    continue
-
-                # Non-rate-limit API error: fail fast.
-                raise ValueError(f"CryptoCompare API Error: {data.get('Message')}")
-
-            if not data.get("Data") or not data["Data"].get("Data"):
-                raise ValueError("CryptoCompare API returned empty or invalid data.")
-
-            return data["Data"]["Data"][-1]["close"]
-
-        # Ask for new token if exhausted all tokens.
-        print(
-            "All provided CryptoCompare tokens appear to be rate-limited or exhausted."
-        )
+        # Ask for new token if exhausted all tokens
+        print("All provided CryptoCompare tokens appear to be rate-limited or exhausted.")
         try:
-            new_token = input(
-                "Enter a new CryptoCompare API token to add (or press Enter to abort): "
-            ).strip()
+            new_token = input("Enter a new CryptoCompare API token to add (or press Enter to abort): ").strip()
         except Exception:
-            raise ValueError(
-                "All CryptoCompare tokens exhausted and interactive input is not available."
-            )
+            raise ValueError("All CryptoCompare tokens exhausted and interactive input is not available.")
+        
         if not new_token:
-            raise ValueError(
-                "No available CryptoCompare API tokens left; aborting price fetch."
-            )
+            raise ValueError("No available CryptoCompare API tokens left; aborting price fetch.")
+        
         CRYPTOCOMPARE_API_TOKENS.insert(0, new_token)
-        print(
-            "Added new CryptoCompare token; retrying price fetch with the new token first..."
-        )
+        print("Added new CryptoCompare token; retrying price fetch with the new token first...")
 
 
 @retry(
@@ -1123,34 +1113,29 @@ def fetch_reward_events(
     round: str | int = None,
     page_size: int = 100,
 ) -> list[object]:
-    """Fetch reward events for a given orchestrator within a specified time range.
-
-    Args:
-        orchestrator: The address of the orchestrator.
-        start_timestamp: The start timestamp for the time range.
-        end_timestamp: The end timestamp for the time range.
-        round: The round to filter events by (optional).
-        page_size: The number of events to fetch per page (default: 100).
-
-    Returns:
-        A list of reward events.
-    """
-    where_clause = build_where_clause(
-        {
-            "delegate": orchestrator,
-            "timestamp_gte": start_timestamp,
-            "timestamp_lte": end_timestamp,
-            "round": str(round) if round is not None else None,
-        }
-    )
+    """Fetch reward events with caching."""
+    cache_params = {
+        'address': orchestrator,
+        'type': 'reward_events'
+    }
+    
+    where_clause = build_where_clause({
+        "delegate": orchestrator,
+        "timestamp_gte": start_timestamp,
+        "timestamp_lte": end_timestamp,
+        "round": str(round) if round is not None else None,
+    })
+    
     variables = {"first": page_size, "skip": 0}
     query = REWARD_EVENTS_QUERY_BASE.format(
         where_clause=where_clause, delegate=orchestrator
     )
+    
     return fetch_graphql_events(
         query=gql(query),
         variables=variables,
         event_key="rewardEvents",
+        cache_params=cache_params
     )
 
 
@@ -1189,6 +1174,7 @@ def fetch_fee_events(
         query=gql(query),
         variables=variables,
         event_key="winningTicketRedeemedEvents",
+        cache_params={"address": recipient, "type": "fee_events"},
     )
 
 
@@ -1226,6 +1212,7 @@ def fetch_bond_events(
         query=gql(query),
         variables=variables,
         event_key="bondEvents",
+        cache_params={"address": delegator, "type": "bond_events"},
     )
 
 
@@ -1263,6 +1250,7 @@ def fetch_unbond_events(
         query=gql(query),
         variables=variables,
         event_key="unbondEvents",
+        cache_params={"address": delegator, "type": "unbond_events"},
     )
 
 
@@ -1335,6 +1323,7 @@ def fetch_withdraw_stake_events(
         query=gql(query),
         variables=variables,
         event_key="withdrawStakeEvents",
+        cache_params={"address": delegator, "type": "withdraw_stake_events"},
     )
 
 
@@ -1371,6 +1360,7 @@ def fetch_withdraw_fees_events(
         query=gql(query),
         variables=variables,
         event_key="withdrawFeesEvents",
+        cache_params={"address": delegator, "type": "withdraw_fees_events"},
     )
 
 
@@ -1407,6 +1397,7 @@ def fetch_rebond_events(
         query=gql(query),
         variables=variables,
         event_key="rebondEvents",
+        cache_params={"address": delegator, "type": "rebond_events"},
     )
 
 
@@ -1556,6 +1547,25 @@ def process_bond_events(bond_events: list, currency: str) -> pd.DataFrame:
         )
     return pd.DataFrame(rows)
 
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=60),
+    retry=retry_if_exception_type(Exception),
+)
+def fetch_round_timestamp(round_id: int) -> int | None:
+    """Fetch the timestamp when a round started.
+    
+    Args:
+        round_id: The round number to get the timestamp for.
+        
+    Returns:
+        The Unix timestamp when the round started, or None if not found/error.
+    """
+    round_info = fetch_round_info(round_id)
+    if round_info and "startTimestamp" in round_info:
+        return int(round_info["startTimestamp"])
+    return None
 
 def process_unbond_events(unbond_events: list, currency: str) -> pd.DataFrame:
     """Process unbond events and create a DataFrame with relevant information.
@@ -2150,18 +2160,18 @@ def add_compounding_rewards(
         reward_data.iterrows(), total=len(reward_data), desc="Processing rewards"
     ):
         current_round = row["round"]
-        reward = row["amount"]
+        reward = row["amount"] if row["amount"] is not None else 0.0
 
         # Get bond and unbond totals for the current round.
         current_bond = (
             bond_events[bond_events["round"] == current_round]["amount"].sum()
             if not bond_events.empty
-            else 0
+            else 0.0
         )
         current_unbond = (
             unbond_events[unbond_events["round"] == current_round]["amount"].sum()
             if not unbond_events.empty
-            else 0
+            else 0.0
         )
 
         # Retrieve the previous stake.
@@ -2170,11 +2180,15 @@ def add_compounding_rewards(
             if i == 0
             else reward_data.loc[i - 1, "pending stake"]
         )
+        previous_stake = previous_stake if previous_stake is not None else 0.0
+        prev_bond = prev_bond if prev_bond is not None else 0.0
+        prev_unbond = prev_unbond if prev_unbond is not None else 0.0
 
         # Calculate the expected pending stake and compounding rewards.
         expected_pending_stake = previous_stake + reward - prev_unbond + prev_bond
         reward_data.at[i, "compounding rewards"] = (
-            row["pending stake"] - expected_pending_stake
+            (row["pending stake"] if row["pending stake"] is not None else 0.0)
+            - expected_pending_stake
         )
 
         prev_bond, prev_unbond = current_bond, current_unbond
@@ -2222,6 +2236,9 @@ def add_cumulative_balances(
             if "pending fees" in combined_df.columns
             else 0
         )
+
+
+
     )
 
     # Total LPT = Starting LPT + Pending Stake + Net Transfers.
@@ -2655,7 +2672,7 @@ if __name__ == "__main__":
     gateways = fee_data["sender"].nunique() if not fee_data.empty else 0
     print(f"Total gateways sending tickets: {gateways}")
 
-    print(f"\nOverview ({start_time} - {end_time}):")
+    print(f"\nOverview ({start_time} - {end_time}:")
     overview_table = generate_overview_table(
         orchestrator=orchestrator,
         start_time=start_time,
@@ -2679,19 +2696,14 @@ if __name__ == "__main__":
         gateways=gateways,
     )
     print(tabulate(overview_table, headers=["Metric", "Value"], tablefmt="grid"))
-
     print("\nFetching token and ETH transfers...")
     token_and_eth_transfers = retrieve_token_and_eth_transfers(
         transactions_df=transactions_df, wallet_address=orchestrator, currency=currency
     )
-
     print("Add missing gas cost information to token and ETH transfers...")
     token_and_eth_transfers = merge_gas_info(
-        data=token_and_eth_transfers,
-        gas_info_df=transactions_with_gas_info_df,
-        currency=currency,
+        data=token_and_eth_transfers, gas_info_df=transactions_with_gas_info_df, currency=currency
     )
-
     # Exit early if no data was found.
     all_data = [
         reward_data,
@@ -2716,7 +2728,6 @@ if __name__ == "__main__":
         reindexed_data,
         ignore_index=True,
     ).sort_values(by="timestamp")
-
     print("Adding cumulative balances to the combined DataFrame...")
     combined_df = add_cumulative_balances(
         combined_df=combined_df,
@@ -2727,7 +2738,10 @@ if __name__ == "__main__":
     print("\nExporting data to Excel...")
     combined_df = combined_df[get_csv_column_order(currency)]
     overview_df = pd.DataFrame(overview_table, columns=["Metric", "Value"])
-    with ExcelWriter("orchestrator_income.xlsx") as writer:
+    # Create filename with orchestrator address and timestamp
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    excel_filename = f"orchestrator_income_{orchestrator[:8]}_{current_time}.xlsx"
+    with ExcelWriter(excel_filename) as writer:
         overview_df.to_excel(writer, sheet_name="overview", index=False)
 
         lpt_transactions = combined_df[combined_df["currency"] == "LPT"]
@@ -2737,5 +2751,4 @@ if __name__ == "__main__":
         eth_transactions.to_excel(writer, sheet_name="ETH transactions", index=False)
 
         combined_df.to_excel(writer, sheet_name="all transactions", index=False)
-
-    print("Excel export completed.")
+    print(f"Excel export completed: {excel_filename}")

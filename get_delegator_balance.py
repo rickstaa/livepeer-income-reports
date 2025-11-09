@@ -5,6 +5,7 @@ from web3 import Web3
 from tabulate import tabulate
 import pandas as pd
 from pandas import ExcelWriter
+from datetime import datetime
 
 from tenacity import (
     retry,
@@ -22,6 +23,12 @@ from get_orch_income import (
     GRAPHQL_CLIENT,
 )
 from gql import gql
+from price_cache import PriceCache
+from cache_manager import DataCache
+
+# Initialize caches
+PRICE_CACHE = PriceCache()
+DATA_CACHE = DataCache()
 
 CURRENT_ROUND_QUERY = """
 query GetCurrentRound {
@@ -48,16 +55,18 @@ query GetUnbondingLocks($delegator: String!) {
     retry=retry_if_exception_type(Exception),
 )
 def fetch_current_round() -> int:
-    """Fetch the current round number from the GraphQL API.
+    """Fetch current round with caching."""
+    cache_key = "current_round"
+    cached_data = DATA_CACHE.get_data("global", "rounds", cache_key)
+    if cached_data is not None:
+        return cached_data
 
-    Returns:
-        The current round number.
-    """
     try:
         query = gql(CURRENT_ROUND_QUERY)
         result = GRAPHQL_CLIENT.execute(query)
-        current_round = result["protocols"][0]["currentRound"]["id"]
-        return int(current_round)
+        current_round = int(result["protocols"][0]["currentRound"]["id"])
+        DATA_CACHE.save_data("global", "rounds", cache_key, current_round)
+        return current_round
     except Exception as e:
         print(f"Error fetching current round: {e}")
         return 0
@@ -466,10 +475,11 @@ if __name__ == "__main__":
     )
 
     print("\nExporting data to Excel...")
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     excel_filename = (
-        "delegator_balance.xlsx"
+        f"delegator_balance_{wallet_addresses[0][:8]}_{current_time}.xlsx"
         if len(wallet_addresses) == 1
-        else "delegators_balance.xlsx"
+        else f"delegators_balance_{current_time}.xlsx"
     )
 
     df = pd.DataFrame(table, columns=["Metric", "Amount", "Value"])

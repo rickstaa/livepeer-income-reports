@@ -1,6 +1,7 @@
 """Retrieve and export delegator income data for tax reporting as a CSV file."""
 
 import sys
+import os
 from datetime import datetime, timezone
 
 from gql import gql
@@ -46,9 +47,26 @@ from get_orch_income import (
     fetch_reward_events,
     BONDING_MANAGER_CONTRACT,
     GRAPHQL_CLIENT,
+    PRICE_API_PROVIDER,  # Add this import
 )
+from price_cache import PriceCache
+from cache_manager import DataCache
 
 tqdm.pandas()
+
+# Initialize caches after imports
+PRICE_CACHE = PriceCache()
+DATA_CACHE = DataCache()
+
+CRYPTO_COMPARE_API_KEYS = os.getenv("CRYPTO_COMPARE_API_KEY", "")
+CRYPTOCOMPARE_API_TOKENS = []
+if PRICE_API_PROVIDER == "cryptocompare":
+    if "," in CRYPTO_COMPARE_API_KEYS:
+        CRYPTOCOMPARE_API_TOKENS = [
+            key.strip() for key in CRYPTO_COMPARE_API_KEYS.split(",") if key.strip()
+        ]
+    elif CRYPTO_COMPARE_API_KEYS.strip():
+        CRYPTOCOMPARE_API_TOKENS = [CRYPTO_COMPARE_API_KEYS.strip()]
 
 ROUNDS_QUERY = """
 query Rounds($first: Int!, $skip: Int!, $startTimestamp_gt: Int!, $startTimestamp_lt: Int!) {
@@ -288,21 +306,31 @@ def process_delegator_balances_over_rounds(
     starting_pending_fees: float,
     reward_timestamps_by_round: dict,
 ) -> pd.DataFrame:
-    """Process delegator balances over rounds using pendingStake and pendingFees. Get price at exact reward call timestamp if available, otherwise round midpoint, else round start time.
+    """Process delegator balances over rounds using pendingStake and pendingFees."""
+    # Return empty DataFrame with expected columns if no rounds to process
+    if not rounds:
+        return pd.DataFrame(columns=[
+            "timestamp",
+            "round",
+            "transaction hash",
+            "transaction url",
+            "direction", 
+            "transaction type",
+            "currency",
+            "amount",
+            f"price ({currency})",
+            f"value ({currency})",
+            "pending rewards",
+            "pending fees",
+            "accumulated rewards",
+            "accumulated fees",
+            "source function"
+        ])
 
-    Args:
-        delegator: The delegator address to process.
-        rounds: A list of rounds to process.
-        currency: The currency for price conversion.
-        starting_pending_stake: The initial pending stake to subtract from totals.
-        starting_pending_fees: The initial pending fees to subtract from totals.
-
-    Returns:
-        A DataFrame containing the processed delegator balances over rounds.
-    """
     rows = []
     previous_pending_stake = starting_pending_stake
     previous_pending_fees = starting_pending_fees
+
     for round_data in tqdm(rounds, desc="Processing rounds for delegator balances"):
         round_id = round_data["id"]
         unix_timestamp = int(round_data["startTimestamp"])
@@ -386,6 +414,26 @@ def process_delegator_balances_over_rounds(
 
         previous_pending_stake = current_pending_stake
         previous_pending_fees = current_pending_fees
+    # Return empty DataFrame with columns if no rows were generated
+    if not rows:
+        return pd.DataFrame(columns=[
+            "timestamp",
+            "round", 
+            "transaction hash",
+            "transaction url",
+            "direction",
+            "transaction type",
+            "currency",
+            "amount", 
+            f"price ({currency})",
+            f"value ({currency})",
+            "pending rewards",
+            "pending fees",
+            "accumulated rewards",
+            "accumulated fees",
+            "source function"
+        ])
+
     return pd.DataFrame(rows)
 
 
@@ -853,7 +901,9 @@ if __name__ == "__main__":
     print("\nExporting data to Excel...")
     combined_df = combined_df[get_csv_column_order(currency)]
     overview_df = pd.DataFrame(overview_table, columns=["Metric", "Value"])
-    with ExcelWriter("delegator_income.xlsx") as writer:
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S") 
+    excel_filename = f"delegator_income_{delegator[:8]}_{current_time}.xlsx"
+    with ExcelWriter(excel_filename) as writer:
         overview_df.to_excel(writer, sheet_name="overview", index=False)
         reward_transactions = combined_df[combined_df["currency"] == "LPT"]
         reward_transactions.to_excel(writer, sheet_name="LPT transactions", index=False)

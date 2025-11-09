@@ -312,7 +312,19 @@ def process_delegator_balances_over_rounds(
     starting_pending_fees: float,
     reward_timestamps_by_round: dict,
 ) -> pd.DataFrame:
-    """Process delegator balances over rounds using pendingStake and pendingFees."""
+    """Process delegator balances over rounds using pendingStake and pendingFees.
+    
+    Args:
+        delegator: The delegator address.
+        rounds: A list of rounds to process.
+        currency: The currency for price fetching.
+        starting_pending_stake: The starting pending stake amount.
+        starting_pending_fees: The starting pending fees amount.
+        reward_timestamps_by_round: A mapping of round IDs to reward call timestamps.
+
+    Returns:
+        A DataFrame with delegator balances and income per round.
+    """
     if not rounds:  # Return empty if no rounds.
         return pd.DataFrame(
             columns=[

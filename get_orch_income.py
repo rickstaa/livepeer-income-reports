@@ -474,7 +474,14 @@ def create_arbiscan_url(transaction_id: str) -> str:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_activation_timestamp(orchestrator: str) -> int:
-    """Fetch the activation timestamp for a given orchestrator with caching."""
+    """Fetch the activation timestamp for a given orchestrator with caching.
+    
+    Args:
+        orchestrator: The orchestrator address.
+
+    Returns:
+        The activation timestamp as an integer, or None if not found/error.
+    """
     cache_key = "activation_timestamp"
     cached_data = DATA_CACHE.get_data(orchestrator, "activation", cache_key)
     if cached_data is not None:
@@ -667,7 +674,14 @@ def fetch_block_number_by_timestamp(timestamp: int, closest: str = "before") -> 
     retry=retry_if_exception_type(Exception),
 )
 def fetch_block_hash_for_round(round_number: str | int) -> str:
-    """Fetch the block hash for a specific round using cache."""
+    """Fetch the block hash for a specific round using cache.
+    
+    Args:
+        round_number: The round number.
+
+    Returns:
+        The block hash as a hex string.
+    """
     cache_key = f"block_hash_{round_number}"
     cached_data = DATA_CACHE.get_data("global", "round_block_hashes", cache_key)
     if cached_data is not None:
@@ -691,7 +705,15 @@ def fetch_block_hash_for_round(round_number: str | int) -> str:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_pending_stake(address: str, block_hash: str) -> int:
-    """Fetch the pending stake with caching."""
+    """Fetch the pending stake with caching.
+    
+    Args:
+        address: The address to fetch pending stake for.
+        block_hash: The block hash to fetch stake at.
+
+    Returns:
+        The pending stake in ETH units, or None if error occurs.
+    """
     cache_key = f"stake_{block_hash}"
     cached_data = DATA_CACHE.get_data(address, "pending_stake", cache_key)
     if cached_data is not None:
@@ -765,7 +787,17 @@ def fetch_pending_fees(address: str, block_hash: str) -> float:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_graphql_events(query: str, variables: dict, event_key: str, cache_params: dict = None) -> list:
-    """Fetch events from GraphQL API with caching support."""
+    """Fetch events from GraphQL API with caching support.
+    
+    Args:
+        query: The GraphQL query string.
+        variables: The variables for the GraphQL query.
+        event_key: The key in the response that contains the list of events.
+        cache_params: Optional dictionary with 'address' and 'type' keys for caching.
+    
+    Returns:
+        A list of events fetched from the GraphQL API.
+    """
     if cache_params:
         cache_key = f"{cache_params['type']}_{variables.get('skip', 0)}_{variables.get('first', 100)}"
         cached_data = DATA_CACHE.get_data(cache_params['address'], cache_params['type'], cache_key)
@@ -1143,7 +1175,18 @@ def fetch_reward_events(
     round: str | int = None,
     page_size: int = 100,
 ) -> list[object]:
-    """Fetch reward events with caching."""
+    """Fetch reward events with caching.
+    
+    Args:
+        orchestrator: The orchestrator address.
+        start_timestamp: The start timestamp for the time range.
+        end_timestamp: The end timestamp for the time range.
+        round: The round to filter events by (optional).
+        page_size: The number of events to fetch per page (default: 100).
+    
+    Returns:
+        A list of reward events.
+    """
     cache_params = {
         'address': orchestrator,
         'type': 'reward_events'

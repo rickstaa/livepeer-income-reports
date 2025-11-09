@@ -26,8 +26,7 @@ from tabulate import tabulate
 from tqdm import tqdm
 from typing import Callable
 import json
-from price_cache import PriceCache
-from cache_manager import DataCache
+from cache import PriceCache, DataCache
 
 tqdm.pandas()
 
@@ -509,7 +508,9 @@ def fetch_activation_timestamp(orchestrator: str) -> int:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_round_info(round_id: int | str) -> dict | None:
-    """Fetch basic round information (id, startBlock, startTimestamp) from the subgraph.
+    """Fetch basic round information (id, startBlock, startTimestamp) from the subgraph with caching.
+    
+    Rounds are immutable once created, so cached indefinitely.
 
     Args:
         round_id: The round identifier (number or string).
@@ -518,6 +519,11 @@ def fetch_round_info(round_id: int | str) -> dict | None:
         A dict with keys {"id", "startBlock", "startTimestamp"} or None if not
         found/error.
     """
+    cache_key = f"round_{round_id}"
+    cached = DATA_CACHE.get_data("global", "round_info", cache_key)
+    if cached is not None:
+        return cached
+    
     try:
         query = gql(ROUND_QUERY)
         variables = {"id": str(round_id)}
@@ -525,11 +531,13 @@ def fetch_round_info(round_id: int | str) -> dict | None:
         rnd = response.get("round")
         if not rnd:
             return None
-        return {
+        result = {
             "id": int(rnd["id"]),
             "startBlock": int(rnd["startBlock"]),
             "startTimestamp": int(rnd["startTimestamp"]),
         }
+        DATA_CACHE.save_data("global", "round_info", cache_key, result)
+        return result
     except Exception as e:
         print(f"Error fetching round info for {round_id}: {e}")
         return None
@@ -541,7 +549,9 @@ def fetch_round_info(round_id: int | str) -> dict | None:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_starting_eth_balance(wallet_address: str, block_hash: str) -> float:
-    """Fetch the ETH balance of a wallet at a specific block.
+    """Fetch the ETH balance of a wallet at a specific block with caching.
+    
+    Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
@@ -551,12 +561,19 @@ def fetch_starting_eth_balance(wallet_address: str, block_hash: str) -> float:
         The ETH balance of the wallet at the specified block, in ETH units.
         Returns 0.0 if an error occurs.
     """
+    cache_key = f"eth_{block_hash}"
+    cached = DATA_CACHE.get_data(wallet_address, "balance", cache_key)
+    if cached is not None:
+        return cached
+    
     try:
         checksum_address = Web3.to_checksum_address(wallet_address)
         balance_wei = ARB_CLIENT.eth.get_balance(
             checksum_address, block_identifier=block_hash
         )
-        return balance_wei / 10**18
+        balance = balance_wei / 10**18
+        DATA_CACHE.save_data(wallet_address, "balance", cache_key, balance)
+        return balance
     except Exception as e:
         print(
             f"Error fetching ETH balance for {wallet_address} at block {block_hash}: "
@@ -571,7 +588,9 @@ def fetch_starting_eth_balance(wallet_address: str, block_hash: str) -> float:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_starting_lpt_balance(wallet_address: str, block_hash: str) -> float:
-    """Fetch the starting unbonded LPT balance of a wallet at a specific block.
+    """Fetch the starting unbonded LPT balance of a wallet at a specific block with caching.
+    
+    Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
@@ -581,12 +600,19 @@ def fetch_starting_lpt_balance(wallet_address: str, block_hash: str) -> float:
         The LPT balance of the wallet at the specified block, in LPT units.
         Returns 0.0 if an error occurs.
     """
+    cache_key = f"lpt_{block_hash}"
+    cached = DATA_CACHE.get_data(wallet_address, "balance", cache_key)
+    if cached is not None:
+        return cached
+    
     try:
         checksum_address = Web3.to_checksum_address(wallet_address)
         balance = LPT_TOKEN_CONTRACT.functions.balanceOf(checksum_address).call(
             block_identifier=block_hash
         )
-        return balance / 10**18
+        balance_value = balance / 10**18
+        DATA_CACHE.save_data(wallet_address, "balance", cache_key, balance_value)
+        return balance_value
     except Exception as e:
         print(
             f"Error fetching LPT balance for {wallet_address} at block {block_hash}: "
@@ -601,7 +627,9 @@ def fetch_starting_lpt_balance(wallet_address: str, block_hash: str) -> float:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_block_number_by_timestamp(timestamp: int, closest: str = "before") -> int:
-    """Fetch the block number for a given timestamp using the Arbiscan API.
+    """Fetch the block number for a given timestamp using the Arbiscan API with caching.
+    
+    Block for a given timestamp never changes, so cached indefinitely.
 
     Args:
         timestamp: The Unix timestamp.
@@ -610,6 +638,11 @@ def fetch_block_number_by_timestamp(timestamp: int, closest: str = "before") -> 
     Returns:
         The block number corresponding to the timestamp.
     """
+    cache_key = f"block_{timestamp}_{closest}"
+    cached = DATA_CACHE.get_data("global", "timestamp_blocks", cache_key)
+    if cached is not None:
+        return cached
+    
     params = {
         "chainid": 42161,
         "module": "block",
@@ -624,7 +657,9 @@ def fetch_block_number_by_timestamp(timestamp: int, closest: str = "before") -> 
         data = response.json()
 
         if data["status"] == "1":
-            return int(data["result"])
+            block_number = int(data["result"])
+            DATA_CACHE.save_data("global", "timestamp_blocks", cache_key, block_number)
+            return block_number
         else:
             raise Exception(f"Error fetching block number: {data['message']}")
     except Exception as e:
@@ -794,7 +829,8 @@ def fetch_crypto_price_cryptocompare(
     }
     
     if not CRYPTOCOMPARE_API_TOKENS:
-        CRYPTOCOMPARE_API_TOKENS.append(CRYPTO_COMPARE_API_KEY)
+        if CRYPTO_COMPARE_API_KEYS.strip():
+            CRYPTOCOMPARE_API_TOKENS.append(CRYPTO_COMPARE_API_KEYS.strip())
 
     while True:
         local_tokens = CRYPTOCOMPARE_API_TOKENS.copy()

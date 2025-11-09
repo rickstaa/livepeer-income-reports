@@ -47,23 +47,12 @@ from get_orch_income import (
     fetch_reward_events,
     BONDING_MANAGER_CONTRACT,
     GRAPHQL_CLIENT,
-    PRICE_API_PROVIDER,  # Add this import
 )
 from cache import DataCache
 
 tqdm.pandas()
 
 DATA_CACHE = DataCache()
-
-CRYPTO_COMPARE_API_KEYS = os.getenv("CRYPTO_COMPARE_API_KEY", "")
-CRYPTOCOMPARE_API_TOKENS = []
-if PRICE_API_PROVIDER == "cryptocompare":
-    if "," in CRYPTO_COMPARE_API_KEYS:
-        CRYPTOCOMPARE_API_TOKENS = [
-            key.strip() for key in CRYPTO_COMPARE_API_KEYS.split(",") if key.strip()
-        ]
-    elif CRYPTO_COMPARE_API_KEYS.strip():
-        CRYPTOCOMPARE_API_TOKENS = [CRYPTO_COMPARE_API_KEYS.strip()]
 
 ROUNDS_QUERY = """
 query Rounds($first: Int!, $skip: Int!, $startTimestamp_gt: Int!, $startTimestamp_lt: Int!) {
@@ -324,8 +313,7 @@ def process_delegator_balances_over_rounds(
     reward_timestamps_by_round: dict,
 ) -> pd.DataFrame:
     """Process delegator balances over rounds using pendingStake and pendingFees."""
-    # Return empty DataFrame with expected columns if no rounds to process
-    if not rounds:
+    if not rounds:  # Return empty if no rounds.
         return pd.DataFrame(
             columns=[
                 "timestamp",
@@ -433,7 +421,8 @@ def process_delegator_balances_over_rounds(
 
         previous_pending_stake = current_pending_stake
         previous_pending_fees = current_pending_fees
-    # Return empty DataFrame with columns if no rows were generated
+
+    # Return empty DataFrame if no rows where generated.
     if not rows:
         return pd.DataFrame(
             columns=[

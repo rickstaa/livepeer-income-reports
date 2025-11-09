@@ -37,23 +37,7 @@ DATA_CACHE = DataCache()
 GRAPH_AUTH_TOKEN = os.getenv("GRAPH_AUTH_TOKEN")
 ARBISCAN_API_KEY_TOKEN = os.getenv("ARBISCAN_API_KEY_TOKEN")
 PRICE_API_PROVIDER = os.getenv("PRICE_API_PROVIDER", "cryptocompare").lower()
-CRYPTO_COMPARE_API_KEYS = os.getenv("CRYPTO_COMPARE_API_KEY", "")
-CRYPTOCOMPARE_API_TOKENS = []
-if PRICE_API_PROVIDER == "cryptocompare":
-    # Handle multiple API keys separated by commas
-    if "," in CRYPTO_COMPARE_API_KEYS:
-        CRYPTOCOMPARE_API_TOKENS = [
-            key.strip() for key in CRYPTO_COMPARE_API_KEYS.split(",") if key.strip()
-        ]
-    # Handle single API key
-    elif CRYPTO_COMPARE_API_KEYS.strip():
-        CRYPTOCOMPARE_API_TOKENS = [CRYPTO_COMPARE_API_KEYS.strip()]
-        
-    if not CRYPTOCOMPARE_API_TOKENS:
-        raise EnvironmentError(
-            "At least one CryptoCompare API token is required in CRYPTO_COMPARE_API_KEY."
-        )
-    print(f"Loaded {len(CRYPTOCOMPARE_API_TOKENS)} CryptoCompare API tokens")
+CRYPTO_COMPARE_API_KEY = os.getenv("CRYPTO_COMPARE_API_KEY", "")
 
 GRAPH_ID = os.getenv("GRAPH_ID", "FE63YgkzcpVocxdCEyEYbvjYqEf2kb1A6daMYRxmejYC")
 ARB_RPC_URL = os.getenv("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc")
@@ -66,7 +50,7 @@ if not ARBISCAN_API_KEY_TOKEN:
     raise EnvironmentError(
         "ARBISCAN_API_KEY_TOKEN environment variable is required but not set."
     )
-if not CRYPTO_COMPARE_API_KEYS:
+if not CRYPTO_COMPARE_API_KEY:
     raise EnvironmentError(
         "CRYPTO_COMPARE_API_KEY environment variable is required but not set."
     )
@@ -91,6 +75,16 @@ with open("ABI/RoundsManager.json", "r") as rounds_manager_abi_file:
     ROUNDS_MANAGER_ABI = json.load(rounds_manager_abi_file)
 with open("ABI/LivepeerToken.json", "r") as lpt_token_abi_file:
     LPT_TOKEN_ABI = json.load(lpt_token_abi_file)
+
+CRYPTOCOMPARE_API_TOKENS: list = []
+CRYPTOCOMPARE_API_TOKENS = [
+    t.strip() for t in CRYPTO_COMPARE_API_KEY.split(",") if t.strip()
+]
+if not CRYPTOCOMPARE_API_TOKENS:
+    raise EnvironmentError(
+        "At least one CryptoCompare API token is required in CRYPTO_COMPARE_API_KEY."
+    )
+
 
 BONDING_MANAGER_CONTRACT = ARB_CLIENT.eth.contract(
     address=BONDING_MANAGER_CONTRACT_ADDRESS, abi=BONDING_MANAGER_ABI
@@ -2774,7 +2768,6 @@ if __name__ == "__main__":
     print("\nExporting data to Excel...")
     combined_df = combined_df[get_csv_column_order(currency)]
     overview_df = pd.DataFrame(overview_table, columns=["Metric", "Value"])
-    # Create filename with orchestrator address and timestamp
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     excel_filename = f"orchestrator_income_{orchestrator[:8]}_{current_time}.xlsx"
     with ExcelWriter(excel_filename) as writer:

@@ -63,7 +63,7 @@ This repository provides Python scripts to retrieve and generate detailed report
    python add_crypto_values.py
    ```
 
-5. The script will generate an Excel file named `orchestrator_income.xlsx` with two tabs: `overview` and `transactions`. The `overview` tab contains a summary of your orchestrator's income, while the `transactions` tab contains detailed transaction data.
+5. The script will generate an Excel file named `orchestrator_income_<TIMESTAMP>.xlsx` with two tabs: `overview` and `transactions`. The `overview` tab contains a summary of your orchestrator's income, while the `transactions` tab contains detailed transaction data.
 
 ## Caching
 

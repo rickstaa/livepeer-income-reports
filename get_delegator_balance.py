@@ -5,6 +5,7 @@ from web3 import Web3
 from tabulate import tabulate
 import pandas as pd
 from pandas import ExcelWriter
+from datetime import datetime
 
 from tenacity import (
     retry,
@@ -22,6 +23,10 @@ from get_orch_income import (
     GRAPHQL_CLIENT,
 )
 from gql import gql
+from cache import DataCache
+
+
+DATA_CACHE = DataCache()
 
 CURRENT_ROUND_QUERY = """
 query GetCurrentRound {
@@ -48,27 +53,36 @@ query GetUnbondingLocks($delegator: String!) {
     retry=retry_if_exception_type(Exception),
 )
 def fetch_current_round() -> int:
-    """Fetch the current round number from the GraphQL API.
+    """Fetch current round with caching."""
+    cache_key = "current_round"
+    cached_data = DATA_CACHE.get_data("global", "rounds", cache_key)
+    if cached_data is not None:
+        return cached_data
 
-    Returns:
-        The current round number.
-    """
     try:
         query = gql(CURRENT_ROUND_QUERY)
         result = GRAPHQL_CLIENT.execute(query)
-        current_round = result["protocols"][0]["currentRound"]["id"]
-        return int(current_round)
+        current_round = int(result["protocols"][0]["currentRound"]["id"])
+        DATA_CACHE.save_data("global", "rounds", cache_key, current_round)
+        return current_round
     except Exception as e:
         print(f"Error fetching current round: {e}")
         return 0
 
 
 def fetch_unbonding_locks_info(wallet_address: str) -> dict:
-    """Fetch unbonding locks info for a delegator.
+    """Fetch unbonding locks info for a delegator with caching.
+
+    Cached with 1h TTL since unbonding locks change on bond/unbond events.
 
     Returns:
         Dict with locked_lpt, withdrawable_lpt amounts and detailed locks data.
     """
+    cache_key = "unbonding_locks"
+    cached = DATA_CACHE.get_data(wallet_address, "unbonding", cache_key)
+    if cached is not None:
+        return cached
+
     try:
         current_round = fetch_current_round()
 
@@ -93,12 +107,15 @@ def fetch_unbonding_locks_info(wallet_address: str) -> dict:
             detailed_locks.append(
                 {"amount": amount, "withdraw_round": withdraw_round, "status": status}
             )
-        return {
+
+        result = {
             "locked_lpt": locked_lpt,
             "withdrawable_lpt": withdrawable_lpt,
             "current_round": current_round,
             "detailed_locks": detailed_locks,
         }
+        DATA_CACHE.save_data(wallet_address, "unbonding", cache_key, result)
+        return result
     except Exception as e:
         print(f"Error fetching unbonding locks for {wallet_address}: {e}")
         return {
@@ -110,7 +127,9 @@ def fetch_unbonding_locks_info(wallet_address: str) -> dict:
 
 
 def fetch_eth_balance(wallet_address: str, block_hash: str) -> float:
-    """Fetch the ETH balance of a wallet at a specific block.
+    """Fetch the ETH balance of a wallet at a specific block with caching.
+
+    Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
@@ -119,14 +138,23 @@ def fetch_eth_balance(wallet_address: str, block_hash: str) -> float:
     Returns:
         The ETH balance in the wallet at the specified block.
     """
+    cache_key = f"eth_{block_hash}"
+    cached = DATA_CACHE.get_data(wallet_address, "balance", cache_key)
+    if cached is not None:
+        return cached
+
     balance_wei = ARB_CLIENT.eth.get_balance(
         wallet_address, block_identifier=block_hash
     )
-    return balance_wei / 10**18
+    balance = balance_wei / 10**18
+    DATA_CACHE.save_data(wallet_address, "balance", cache_key, balance)
+    return balance
 
 
 def fetch_lpt_balance(wallet_address: str, block_hash: str) -> float:
-    """Fetch the unbonded LPT balance of a wallet at a specific block.
+    """Fetch the unbonded LPT balance of a wallet at a specific block with caching.
+
+    Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
@@ -135,16 +163,25 @@ def fetch_lpt_balance(wallet_address: str, block_hash: str) -> float:
     Returns:
         The unbonded LPT balance in the wallet at the specified block.
     """
-    return (
+    cache_key = f"lpt_{block_hash}"
+    cached = DATA_CACHE.get_data(wallet_address, "balance", cache_key)
+    if cached is not None:
+        return cached
+
+    balance = (
         LPT_TOKEN_CONTRACT.functions.balanceOf(wallet_address).call(
             block_identifier=block_hash
         )
         / 10**18
     )
+    DATA_CACHE.save_data(wallet_address, "balance", cache_key, balance)
+    return balance
 
 
 def fetch_pending_fees(wallet_address: str, block_hash: str) -> float:
-    """Fetch the pending fees for a delegator at a specific round.
+    """Fetch the pending fees for a delegator at a specific round with caching.
+
+    Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
@@ -153,16 +190,25 @@ def fetch_pending_fees(wallet_address: str, block_hash: str) -> float:
     Returns:
         The pending fees in ETH for the delegator at the specified round.
     """
-    return (
+    cache_key = f"fees_{block_hash}"
+    cached = DATA_CACHE.get_data(wallet_address, "pending", cache_key)
+    if cached is not None:
+        return cached
+
+    fees = (
         BONDING_MANAGER_CONTRACT.functions.pendingFees(wallet_address, 0).call(
             block_identifier=block_hash
         )
         / 10**18
     )
+    DATA_CACHE.save_data(wallet_address, "pending", cache_key, fees)
+    return fees
 
 
 def fetch_pending_rewards(wallet_address: str, block_hash: str) -> float:
-    """Fetch the pending rewards for a delegator at a specific round.
+    """Fetch the pending rewards for a delegator at a specific round with caching.
+
+    Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
@@ -171,12 +217,19 @@ def fetch_pending_rewards(wallet_address: str, block_hash: str) -> float:
     Returns:
         The pending rewards in LPT for the delegator at the specified round.
     """
-    return (
+    cache_key = f"rewards_{block_hash}"
+    cached = DATA_CACHE.get_data(wallet_address, "pending", cache_key)
+    if cached is not None:
+        return cached
+
+    rewards = (
         BONDING_MANAGER_CONTRACT.functions.pendingStake(wallet_address, 0).call(
             block_identifier=block_hash
         )
         / 10**18
     )
+    DATA_CACHE.save_data(wallet_address, "pending", cache_key, rewards)
+    return rewards
 
 
 def fetch_delegator_balances(
@@ -276,7 +329,11 @@ def fetch_delegator_balances(
 
 
 def create_balance_table(
-    date_time: str, wallet_addresses: list, balances: dict, currency: str, current_round: int
+    date_time: str,
+    wallet_addresses: list,
+    balances: dict,
+    currency: str,
+    current_round: int,
 ) -> list:
     """Create a table for the delegator balance report.
 
@@ -383,9 +440,7 @@ def create_unbonding_locks_table(wallet_addresses: list, unbonding_data: dict) -
                 wallet_display = wallet_address
 
             if not detailed_locks:
-                table.append(
-                    [wallet_display, "-", "0.0000", "No unbonding locks"]
-                )
+                table.append([wallet_display, "-", "0.0000", "No unbonding locks"])
             else:
                 for lock in detailed_locks:
                     table.append(
@@ -431,13 +486,13 @@ if __name__ == "__main__":
     balances, unbonding_data = fetch_delegator_balances(
         wallet_addresses=checksum_addresses, timestamp=timestamp, currency=currency
     )
-    
+
     # Get current round from unbonding data (it's the same for all wallets)
     current_round = 0
     if unbonding_data:
         first_wallet_data = next(iter(unbonding_data.values()))
         current_round = first_wallet_data.get("current_round", 0)
-    
+
     table = create_balance_table(
         date_time=date_time,
         wallet_addresses=wallet_addresses,
@@ -466,10 +521,11 @@ if __name__ == "__main__":
     )
 
     print("\nExporting data to Excel...")
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     excel_filename = (
-        "delegator_balance.xlsx"
+        f"delegator_balance_{wallet_addresses[0][:8]}_{current_time}.xlsx"
         if len(wallet_addresses) == 1
-        else "delegators_balance.xlsx"
+        else f"delegators_balance_{current_time}.xlsx"
     )
 
     df = pd.DataFrame(table, columns=["Metric", "Amount", "Value"])

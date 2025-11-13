@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+# Cache directory
+.cache/
+
 *.csv
 *.xlsx
 

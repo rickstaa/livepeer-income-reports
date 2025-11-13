@@ -101,8 +101,11 @@ def add_crypto_prices(
         df[f"Price ({currency})"] = prices
         df[f"Value ({currency})"] = values
         if output_file is None:
+            current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
             base_name = input_file.rsplit(".", 1)[0]
-            output_file = f"{base_name}_with_prices_{currency.lower()}.xlsx"
+            output_file = (
+                f"{base_name}_with_prices_{currency.lower()}_{current_time}.xlsx"
+            )
         with ExcelWriter(output_file) as writer:
             df.to_excel(writer, sheet_name="crypto", index=False)
 

@@ -1,6 +1,7 @@
 """Retrieve and export delegator income data for tax reporting as a CSV file."""
 
 import sys
+import os
 from datetime import datetime, timezone
 
 from gql import gql
@@ -47,8 +48,11 @@ from get_orch_income import (
     BONDING_MANAGER_CONTRACT,
     GRAPHQL_CLIENT,
 )
+from cache import DataCache
 
 tqdm.pandas()
+
+DATA_CACHE = DataCache()
 
 ROUNDS_QUERY = """
 query Rounds($first: Int!, $skip: Int!, $startTimestamp_gt: Int!, $startTimestamp_lt: Int!) {
@@ -109,7 +113,10 @@ def get_csv_column_order(currency: str) -> list:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_delegator_info(delegator: str, block_hash: str) -> dict:
-    """Fetch comprehensive delegator information at a specific block.
+    """Fetch comprehensive delegator information at a specific block with caching.
+
+    Historical blockchain state at a specific block never changes, so this is cached
+    indefinitely (24h TTL for safety).
 
     Args:
         delegator: The address of the delegator.
@@ -118,6 +125,11 @@ def fetch_delegator_info(delegator: str, block_hash: str) -> dict:
     Returns:
         A dictionary with delegator information.
     """
+    cache_key = f"delegator_info_{block_hash}"
+    cached = DATA_CACHE.get_data(delegator, "blockchain_state", cache_key)
+    if cached is not None:
+        return cached
+
     try:
         checksum_delegator = Web3.to_checksum_address(delegator)
 
@@ -137,7 +149,7 @@ def fetch_delegator_info(delegator: str, block_hash: str) -> dict:
         pending_stake = fetch_pending_stake(address=delegator, block_hash=block_hash)
         pending_fees = fetch_pending_fees(address=delegator, block_hash=block_hash)
 
-        return {
+        result = {
             "bonded_amount": bonded_amount,
             "fees": fees,
             "delegate_address": delegate_address,
@@ -148,13 +160,18 @@ def fetch_delegator_info(delegator: str, block_hash: str) -> dict:
             "pending_stake": pending_stake,
             "pending_fees": pending_fees,
         }
+
+        DATA_CACHE.save_data(delegator, "blockchain_state", cache_key, result)
+        return result
     except Exception as e:
         print(f"Error fetching delegator info for {delegator}: {e}")
         return None
 
 
 def fetch_rounds_in_timeframe(start_timestamp: int, end_timestamp: int) -> list:
-    """Fetch all rounds within a timestamp range.
+    """Fetch all rounds within a timestamp range with caching.
+
+    Rounds are immutable once created, so cache with 1h TTL (rounds finalize quickly).
 
     Args:
         start_timestamp: The start timestamp of the range.
@@ -163,6 +180,11 @@ def fetch_rounds_in_timeframe(start_timestamp: int, end_timestamp: int) -> list:
     Returns:
         A list of rounds within the specified timestamp range.
     """
+    cache_key = f"rounds_{start_timestamp}_{end_timestamp}"
+    cached = DATA_CACHE.get_data("global", "rounds", cache_key)
+    if cached is not None:
+        return cached
+
     variables = {
         "first": 1000,
         "skip": 0,
@@ -184,6 +206,8 @@ def fetch_rounds_in_timeframe(start_timestamp: int, end_timestamp: int) -> list:
         except Exception as e:
             print(f"Error fetching rounds: {e}")
             break
+
+    DATA_CACHE.save_data("global", "rounds", cache_key, all_rounds)
     return all_rounds
 
 
@@ -288,21 +312,44 @@ def process_delegator_balances_over_rounds(
     starting_pending_fees: float,
     reward_timestamps_by_round: dict,
 ) -> pd.DataFrame:
-    """Process delegator balances over rounds using pendingStake and pendingFees. Get price at exact reward call timestamp if available, otherwise round midpoint, else round start time.
-
+    """Process delegator balances over rounds using pendingStake and pendingFees.
+    
     Args:
-        delegator: The delegator address to process.
+        delegator: The delegator address.
         rounds: A list of rounds to process.
-        currency: The currency for price conversion.
-        starting_pending_stake: The initial pending stake to subtract from totals.
-        starting_pending_fees: The initial pending fees to subtract from totals.
+        currency: The currency for price fetching.
+        starting_pending_stake: The starting pending stake amount.
+        starting_pending_fees: The starting pending fees amount.
+        reward_timestamps_by_round: A mapping of round IDs to reward call timestamps.
 
     Returns:
-        A DataFrame containing the processed delegator balances over rounds.
+        A DataFrame with delegator balances and income per round.
     """
+    if not rounds:  # Return empty if no rounds.
+        return pd.DataFrame(
+            columns=[
+                "timestamp",
+                "round",
+                "transaction hash",
+                "transaction url",
+                "direction",
+                "transaction type",
+                "currency",
+                "amount",
+                f"price ({currency})",
+                f"value ({currency})",
+                "pending rewards",
+                "pending fees",
+                "accumulated rewards",
+                "accumulated fees",
+                "source function",
+            ]
+        )
+
     rows = []
     previous_pending_stake = starting_pending_stake
     previous_pending_fees = starting_pending_fees
+
     for round_data in tqdm(rounds, desc="Processing rounds for delegator balances"):
         round_id = round_data["id"]
         unix_timestamp = int(round_data["startTimestamp"])
@@ -386,6 +433,29 @@ def process_delegator_balances_over_rounds(
 
         previous_pending_stake = current_pending_stake
         previous_pending_fees = current_pending_fees
+
+    # Return empty DataFrame if no rows where generated.
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "timestamp",
+                "round",
+                "transaction hash",
+                "transaction url",
+                "direction",
+                "transaction type",
+                "currency",
+                "amount",
+                f"price ({currency})",
+                f"value ({currency})",
+                "pending rewards",
+                "pending fees",
+                "accumulated rewards",
+                "accumulated fees",
+                "source function",
+            ]
+        )
+
     return pd.DataFrame(rows)
 
 
@@ -853,7 +923,9 @@ if __name__ == "__main__":
     print("\nExporting data to Excel...")
     combined_df = combined_df[get_csv_column_order(currency)]
     overview_df = pd.DataFrame(overview_table, columns=["Metric", "Value"])
-    with ExcelWriter("delegator_income.xlsx") as writer:
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    excel_filename = f"delegator_income_{delegator[:8]}_{current_time}.xlsx"
+    with ExcelWriter(excel_filename) as writer:
         overview_df.to_excel(writer, sheet_name="overview", index=False)
         reward_transactions = combined_df[combined_df["currency"] == "LPT"]
         reward_transactions.to_excel(writer, sheet_name="LPT transactions", index=False)

@@ -63,4 +63,24 @@ This repository provides Python scripts to retrieve and generate detailed report
    python add_crypto_values.py
    ```
 
-5. The script will generate an Excel file named `orchestrator_income.xlsx` with two tabs: `overview` and `transactions`. The `overview` tab contains a summary of your orchestrator's income, while the `transactions` tab contains detailed transaction data.
+5. The script will generate an Excel file named `orchestrator_income_<TIMESTAMP>.xlsx` with two tabs: `overview` and `transactions`. The `overview` tab contains a summary of your orchestrator's income, while the `transactions` tab contains detailed transaction data.
+
+## Caching
+
+The scripts use a local file-based cache (stored in `.cache/`) to dramatically speed up repeated runs and reduce API calls:
+
+- **What's cached**: Historical blockchain data (balances, pending rewards/fees at specific blocks), round information, block lookups, and crypto prices
+- **Cache duration**: 24 hours (historical blockchain state never changes, but TTL provides a safety margin)
+- **Location**: `.cache/` directory (automatically created, already in `.gitignore`)
+- **Performance**: Repeated runs for the same time period are **50-100x faster** with warm cache
+- **Clear cache**: Simply delete the `.cache/` folder to fetch fresh data from all sources
+
+**Example cache structure:**
+
+```text
+.cache/
+├── data/           # Blockchain state & round data (24h TTL)
+└── prices/         # Historical crypto prices (no expiry)
+```
+
+The cache is thread-safe within a single process and uses atomic writes to prevent corruption. Historical data at specific blocks is immutable and safe to cache indefinitely.

@@ -828,7 +828,7 @@ def fetch_graphql_events(query: str, variables: dict, event_key: str) -> list:
 def fetch_crypto_price_cryptocompare(
     crypto_symbol: str, target_currency: str, unix_timestamp: int
 ) -> float:
-    """Fetch the historical price of a cryptocurrency using the CryptoCompare API with
+    """Fetch the historical price at an exact timestamp using CryptoCompare with
     caching.
 
     Args:
@@ -845,12 +845,11 @@ def fetch_crypto_price_cryptocompare(
     if cached_price is not None:
         return cached_price
 
-    url = "https://min-api.cryptocompare.com/data/v2/histoday"
+    url = "https://min-api.cryptocompare.com/data/pricehistorical"
     base_params = {
         "fsym": crypto_symbol,
-        "tsym": target_currency,
-        "limit": 1,
-        "toTs": unix_timestamp,
+        "tsyms": target_currency,
+        "ts": unix_timestamp,
     }
 
     while True:
@@ -873,12 +872,17 @@ def fetch_crypto_price_cryptocompare(
                         continue
                     raise ValueError(f"CryptoCompare API error: {data.get('Message')}")
 
-                if not data.get("Data") or not data["Data"].get("Data"):
+                symbol_data = data.get(crypto_symbol)
+                if (
+                    not symbol_data
+                    or target_currency not in symbol_data
+                    or symbol_data[target_currency] is None
+                ):
                     raise ValueError(
                         "CryptoCompare API returned empty or invalid data."
                     )
 
-                price = data["Data"]["Data"][-1]["close"]
+                price = float(symbol_data[target_currency])
                 PRICE_CACHE.save_price(
                     crypto_symbol, target_currency, unix_timestamp, price
                 )

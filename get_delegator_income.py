@@ -1,7 +1,6 @@
 """Retrieve and export delegator income data for tax reporting as a CSV file."""
 
 import sys
-import os
 from datetime import datetime, timezone
 
 from gql import gql

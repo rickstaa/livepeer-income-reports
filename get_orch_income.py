@@ -473,6 +473,8 @@ def create_arbiscan_url(transaction_id: str) -> str:
 def fetch_activation_timestamp(orchestrator: str) -> int:
     """Fetch the activation timestamp for a given orchestrator with caching.
 
+    Activation timestamp for an orchestrator never changes, so cached indefinitely.
+
     Args:
         orchestrator: The orchestrator address.
 
@@ -506,7 +508,8 @@ def fetch_activation_timestamp(orchestrator: str) -> int:
     retry=retry_if_exception_type(Exception),
 )
 def fetch_round_info(round_id: int | str) -> dict | None:
-    """Fetch basic round information (id, startBlock, startTimestamp) from the subgraph with caching.
+    """Fetch basic round information (id, startBlock, startTimestamp) from the subgraph
+    with caching.
 
     Rounds are immutable once created, so cached indefinitely.
 
@@ -546,20 +549,20 @@ def fetch_round_info(round_id: int | str) -> dict | None:
     wait=wait_exponential(multiplier=1, min=1, max=60),
     retry=retry_if_exception_type(Exception),
 )
-def fetch_starting_eth_balance(wallet_address: str, block_hash: str) -> float:
+def fetch_starting_eth_balance(wallet_address: str, block_identifier: int) -> float:
     """Fetch the ETH balance of a wallet at a specific block with caching.
 
     Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
-        block_hash: The block hash to fetch the balance at.
+        block_identifier: Block number to fetch the balance at.
 
     Returns:
         The ETH balance of the wallet at the specified block, in ETH units.
         Returns 0.0 if an error occurs.
     """
-    cache_key = f"eth_{block_hash}"
+    cache_key = f"eth_{block_identifier}"
     cached = DATA_CACHE.get_data(wallet_address, "balance", cache_key)
     if cached is not None:
         return cached
@@ -567,15 +570,15 @@ def fetch_starting_eth_balance(wallet_address: str, block_hash: str) -> float:
     try:
         checksum_address = Web3.to_checksum_address(wallet_address)
         balance_wei = ARB_CLIENT.eth.get_balance(
-            checksum_address, block_identifier=block_hash
+            checksum_address, block_identifier=block_identifier
         )
         balance = balance_wei / 10**18
         DATA_CACHE.save_data(wallet_address, "balance", cache_key, balance)
         return balance
     except Exception as e:
         print(
-            f"Error fetching ETH balance for {wallet_address} at block {block_hash}: "
-            f"{e}"
+            f"Error fetching ETH balance for {wallet_address} at block "
+            f"{block_identifier}: {e}"
         )
         return 0.0
 
@@ -585,20 +588,21 @@ def fetch_starting_eth_balance(wallet_address: str, block_hash: str) -> float:
     wait=wait_exponential(multiplier=1, min=1, max=60),
     retry=retry_if_exception_type(Exception),
 )
-def fetch_starting_lpt_balance(wallet_address: str, block_hash: str) -> float:
-    """Fetch the starting unbonded LPT balance of a wallet at a specific block with caching.
+def fetch_starting_lpt_balance(wallet_address: str, block_identifier: int) -> float:
+    """Fetch the starting unbonded LPT balance of a wallet at a specific block with
+    caching.
 
     Historical blockchain state at a block never changes, so cached indefinitely.
 
     Args:
         wallet_address: The wallet address to check.
-        block_hash: The block hash to fetch the balance at.
+        block_identifier: Block number to fetch the balance at.
 
     Returns:
         The LPT balance of the wallet at the specified block, in LPT units.
         Returns 0.0 if an error occurs.
     """
-    cache_key = f"lpt_{block_hash}"
+    cache_key = f"lpt_{block_identifier}"
     cached = DATA_CACHE.get_data(wallet_address, "balance", cache_key)
     if cached is not None:
         return cached
@@ -606,15 +610,15 @@ def fetch_starting_lpt_balance(wallet_address: str, block_hash: str) -> float:
     try:
         checksum_address = Web3.to_checksum_address(wallet_address)
         balance = LPT_TOKEN_CONTRACT.functions.balanceOf(checksum_address).call(
-            block_identifier=block_hash
+            block_identifier=block_identifier
         )
         balance_value = balance / 10**18
         DATA_CACHE.save_data(wallet_address, "balance", cache_key, balance_value)
         return balance_value
     except Exception as e:
         print(
-            f"Error fetching LPT balance for {wallet_address} at block {block_hash}: "
-            f"{e}"
+            f"Error fetching LPT balance for {wallet_address} at block "
+            f"{block_identifier}: {e}"
         )
         return 0.0
 
@@ -673,6 +677,8 @@ def fetch_block_number_by_timestamp(timestamp: int, closest: str = "before") -> 
 def fetch_block_hash_for_round(round_number: str | int) -> str:
     """Fetch the block hash for a specific round using cache.
 
+    Block hash for a round never changes, so cached indefinitely.
+
     Args:
         round_number: The round number.
 
@@ -703,6 +709,8 @@ def fetch_block_hash_for_round(round_number: str | int) -> str:
 )
 def fetch_pending_stake(address: str, block_hash: str) -> int:
     """Fetch the pending stake with caching.
+
+    Pending stake never changes for a given block, so cached indefinitely.
 
     Args:
         address: The address to fetch pending stake for.
@@ -745,6 +753,8 @@ def fetch_pending_stake(address: str, block_hash: str) -> int:
 def fetch_pending_fees(address: str, block_hash: str) -> float:
     """Fetch the pending fees with caching.
 
+    Pending fees never change for a given block, so cached indefinitely.
+
     Args:
         address: The address to fetch pending fees for.
         block_hash: The block hash to fetch fees at.
@@ -783,28 +793,17 @@ def fetch_pending_fees(address: str, block_hash: str) -> float:
     wait=wait_exponential(multiplier=1, min=1, max=60),
     retry=retry_if_exception_type(Exception),
 )
-def fetch_graphql_events(
-    query: str, variables: dict, event_key: str, cache_params: dict = None
-) -> list:
-    """Fetch events from GraphQL API with caching support.
+def fetch_graphql_events(query: str, variables: dict, event_key: str) -> list:
+    """Fetch events from GraphQL API.
 
     Args:
         query: The GraphQL query string.
         variables: The variables for the GraphQL query.
         event_key: The key in the response that contains the list of events.
-        cache_params: Optional dictionary with 'address' and 'type' keys for caching.
 
     Returns:
         A list of events fetched from the GraphQL API.
     """
-    if cache_params:
-        cache_key = f"{cache_params['type']}_{variables.get('skip', 0)}_{variables.get('first', 100)}"
-        cached_data = DATA_CACHE.get_data(
-            cache_params["address"], cache_params["type"], cache_key
-        )
-        if cached_data is not None:
-            return cached_data
-
     all_events = []
     page_size = variables.get("first", 100)
     skip = variables.get("skip", 0)
@@ -823,18 +822,14 @@ def fetch_graphql_events(
             print(f"Error while fetching {event_key}: {e}")
             break
 
-    if cache_params:
-        DATA_CACHE.save_data(
-            cache_params["address"], cache_params["type"], cache_key, all_events
-        )
-
     return all_events
 
 
 def fetch_crypto_price_cryptocompare(
     crypto_symbol: str, target_currency: str, unix_timestamp: int
 ) -> float:
-    """Fetch the historical price of a cryptocurrency using the CryptoCompare API with caching.
+    """Fetch the historical price of a cryptocurrency using the CryptoCompare API with
+    caching.
 
     Args:
         crypto_symbol: The cryptocurrency symbol (e.g., "ETH", "LPT").
@@ -844,7 +839,6 @@ def fetch_crypto_price_cryptocompare(
     Returns:
         The price of the cryptocurrency in the target currency.
     """
-    # Check cache first
     cached_price = PRICE_CACHE.get_cached_price(
         crypto_symbol, target_currency, unix_timestamp
     )
@@ -903,7 +897,8 @@ def fetch_crypto_price_cryptocompare(
             ).strip()
         except Exception:
             raise ValueError(
-                "All CryptoCompare tokens exhausted and interactive input is not available."
+                "All CryptoCompare tokens exhausted and interactive input is not "
+                "available."
             )
 
         if not new_token:
@@ -913,7 +908,8 @@ def fetch_crypto_price_cryptocompare(
 
         CRYPTOCOMPARE_API_TOKENS.insert(0, new_token)
         print(
-            "Added new CryptoCompare token; retrying price fetch with the new token first..."
+            "Added new CryptoCompare token; retrying price fetch with the new token "
+            "first..."
         )
 
 
@@ -1203,8 +1199,6 @@ def fetch_reward_events(
     Returns:
         A list of reward events.
     """
-    cache_params = {"address": orchestrator, "type": "reward_events"}
-
     where_clause = build_where_clause(
         {
             "delegate": orchestrator,
@@ -1213,17 +1207,14 @@ def fetch_reward_events(
             "round": str(round) if round is not None else None,
         }
     )
-
     variables = {"first": page_size, "skip": 0}
     query = REWARD_EVENTS_QUERY_BASE.format(
         where_clause=where_clause, delegate=orchestrator
     )
-
     return fetch_graphql_events(
         query=gql(query),
         variables=variables,
         event_key="rewardEvents",
-        cache_params=cache_params,
     )
 
 
@@ -1262,7 +1253,6 @@ def fetch_fee_events(
         query=gql(query),
         variables=variables,
         event_key="winningTicketRedeemedEvents",
-        cache_params={"address": recipient, "type": "fee_events"},
     )
 
 
@@ -1300,7 +1290,6 @@ def fetch_bond_events(
         query=gql(query),
         variables=variables,
         event_key="bondEvents",
-        cache_params={"address": delegator, "type": "bond_events"},
     )
 
 
@@ -1338,7 +1327,6 @@ def fetch_unbond_events(
         query=gql(query),
         variables=variables,
         event_key="unbondEvents",
-        cache_params={"address": delegator, "type": "unbond_events"},
     )
 
 
@@ -1411,7 +1399,6 @@ def fetch_withdraw_stake_events(
         query=gql(query),
         variables=variables,
         event_key="withdrawStakeEvents",
-        cache_params={"address": delegator, "type": "withdraw_stake_events"},
     )
 
 
@@ -1448,7 +1435,6 @@ def fetch_withdraw_fees_events(
         query=gql(query),
         variables=variables,
         event_key="withdrawFeesEvents",
-        cache_params={"address": delegator, "type": "withdraw_fees_events"},
     )
 
 
@@ -1485,7 +1471,6 @@ def fetch_rebond_events(
         query=gql(query),
         variables=variables,
         event_key="rebondEvents",
-        cache_params={"address": delegator, "type": "rebond_events"},
     )
 
 
@@ -2043,7 +2028,8 @@ def merge_gas_info(
         currency: The currency for the gas cost values (e.g., "EUR", "USD
 
     Returns:
-        A DataFrame with gas cost information merged, or the original DataFrame if empty.
+        A DataFrame with gas cost information merged, or the original DataFrame if 
+        empty.
     """
     if not data.empty:
         return data.merge(
@@ -2555,19 +2541,19 @@ if __name__ == "__main__":
         print("Could not fetch activation timestamp")
 
     print("\nFetching start and end balances...")
-    start_block_hash = fetch_block_number_by_timestamp(timestamp=start_timestamp)
-    end_block_hash = fetch_block_number_by_timestamp(timestamp=end_timestamp)
+    start_block_number = fetch_block_number_by_timestamp(timestamp=start_timestamp)
+    end_block_number = fetch_block_number_by_timestamp(timestamp=end_timestamp)
     starting_eth_balance = fetch_starting_eth_balance(
-        wallet_address=orchestrator, block_hash=start_block_hash
+        wallet_address=orchestrator, block_identifier=start_block_number
     )
     starting_lpt_balance = fetch_starting_lpt_balance(
-        wallet_address=orchestrator, block_hash=start_block_hash
+        wallet_address=orchestrator, block_identifier=start_block_number
     )
     end_eth_balance = fetch_starting_eth_balance(
-        wallet_address=orchestrator, block_hash=end_block_hash
+        wallet_address=orchestrator, block_identifier=end_block_number
     )
     end_lpt_balance = fetch_starting_lpt_balance(
-        wallet_address=orchestrator, block_hash=end_block_hash
+        wallet_address=orchestrator, block_identifier=end_block_number
     )
     start_eth_price = fetch_crypto_price(
         crypto_symbol="ETH", target_currency=currency, unix_timestamp=start_timestamp

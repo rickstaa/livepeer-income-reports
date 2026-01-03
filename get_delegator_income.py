@@ -667,16 +667,16 @@ if __name__ == "__main__":
     start_block_number = fetch_block_number_by_timestamp(timestamp=start_timestamp)
     end_block_number = fetch_block_number_by_timestamp(timestamp=end_timestamp)
     starting_eth_balance = fetch_starting_eth_balance(
-        wallet_address=delegator, block_hash=start_block_number
+        wallet_address=delegator, block_identifier=start_block_number
     )
     starting_lpt_balance = fetch_starting_lpt_balance(
-        wallet_address=delegator, block_hash=start_block_number
+        wallet_address=delegator, block_identifier=start_block_number
     )
     end_eth_balance = fetch_starting_eth_balance(
-        wallet_address=delegator, block_hash=end_block_number
+        wallet_address=delegator, block_identifier=end_block_number
     )
     end_lpt_balance = fetch_starting_lpt_balance(
-        wallet_address=delegator, block_hash=end_block_number
+        wallet_address=delegator, block_identifier=end_block_number
     )
     start_eth_price = fetch_crypto_price(
         crypto_symbol="ETH", target_currency=currency, unix_timestamp=start_timestamp
